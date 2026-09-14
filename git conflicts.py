@@ -64,3 +64,15 @@ git status
 git diff --cached --stat
 
 
+# Pharouq
+git stash
+git pull origin dev
+git stash pop
+git reset --hard origin/dev
+git stash pop
+
+
+
+
+
+
