@@ -72,6 +72,11 @@ git reset --hard origin/dev
 git stash pop
 
 
+git pull origin dev
+git pull origin ova2-679-thalian-hall
+git push origin ova2-679-thalian-hall -f
+
+
 
 
 
