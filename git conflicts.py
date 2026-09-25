@@ -77,7 +77,17 @@ git pull origin ova2-679-thalian-hall
 git push origin ova2-679-thalian-hall -f
 
 
+# If the old branch name was already pushed, the remote still has it under the old name. When you're ready to push, run:
+git push -u origin ova2-873-peakradar
+git push origin --delete ova2-873-dusty-loo-bon-vivant-theater   # only if the old name exists on the remote
 
+
+# Before you commit, check git status. Someone has staged SeleniumBase's failure artifacts:
+
+latest_logs/liverun.line_5/basic_test_info.txt
+latest_logs/liverun.line_5/page_source.html
+latest_logs/liverun.line_5/screenshot.png (the captcha screenshot)
+These are run output and shouldn't go into the repo. Unstage them with git restore --staged latest_logs.
 
 
 
