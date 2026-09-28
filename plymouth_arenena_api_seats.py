@@ -73,3 +73,140 @@ if price_cat and price_cat not in price_by_category:
         "  Seat %s: priceCategory=%s not in salesoffer -- not on sale, skipped",
         seat_id, price_cat)
     continue
+
+
+4. A failed per-seat request retries instead of falling back
+Before, a failed request quietly swapped real seats for a "FLAT 4" label.
+Now the error propagates, so the existing 3-attempt retry for each performance tries again.
+data = self._get_json(url) or {}   # raises on failure -> performance retry loop
+rows = data.get("rows") or []
+if not rows:
+    return None                    # only case that falls back to section level
+
+5. The availability call retries brief failures
+In your run, Dreamboys got HTTP 400 once, then 200 on 7 re-calls in a row. 
+A 404 isn't retried, because Simon Brodkin returns 404 every time.
+
+for attempt in range(1, AVAILABILITY_MAX_ATTEMPTS + 1):   # = 3
+    try:
+        data = self._get_json(url) or []
+        return {...}
+    except Exception as exc:
+        response = getattr(exc, "response", None)
+        if response is not None and response.status_code == 404:
+            break
+        if attempt < AVAILABILITY_MAX_ATTEMPTS:
+            human_delay(*DELAY_BETWEEN_API_CALLS)
+
+
+6. Genre filter: plays/drama and musicals only
+The rule rests on the check of all 38 full show pages described above:
+
+Comedy and tribute tags are dropped outright.
+A show is kept only if its listing headline, or the first sentence of its page description, calls itself a musical or a play/drama.
+Only the first sentence is read, because later sentences mention other works. 
+Fisherman's Friends' second sentence, for example, says the band "inspired… a touring stage musical".
+# config
+SHOW_MUSICAL_TEXT_RE = (
+    r"\bmusical\s+(?:theatre|theater|version|production)\b"
+    r"|\b(?:the|a|new|hit)\s+musical\b(?!\s+(?:vision|maestro|director|talent))"
+)
+SHOW_PLAY_TEXT_RE = r"\b(?:a\s+(?:new\s+)?play|stage\s+play|drama|tragedy)\b"
+SHOW_EXCLUDED_TAGS = frozenset({"comedy", "tribute"})
+
+# run_extractor.py
+def _classify_show(headline, description, genre_hint):
+    tags = {g for g in genre_hint.split(", ") if g}
+    if tags & SHOW_EXCLUDED_TAGS:
+        return None
+    first_sentence = re.split(r"[.!?\u2026]", description or "", maxsplit=1)[0]
+    text = f"{headline} {first_sentence}"
+    if re.search(SHOW_MUSICAL_TEXT_RE, text, re.IGNORECASE):
+        return standardize_category("Musical")
+    if re.search(SHOW_PLAY_TEXT_RE, text, re.IGNORECASE):
+        return standardize_category("Play")
+    return None
+The description comes from the show page (.info-details .more-less-content). 
+Out-of-scope shows are dropped in extract() before any seat-map calls, and the category is written into each CSV row.
+Today this keeps Jeff Wayne's War of the Worlds and Cirque: The Greatest Show, both as Musical.
+
+7. Housekeeping
+Stale log lines, docstrings and config comments are corrected.
+.claude/agents/prod-scraper-fixer.md records the per-seat endpoint and the unreliable sold-out flag. 
+It also covers the price-category rule and the genre rule.
+Current security in the scraper
+What the site uses: Akamai Bot Manager on tickets.plymoutharena.com (cookies _abck, bm_sz, ak_bmsc, bm_sv), 
+and Cloudflare in front of the WordPress site (__cf_bm). There is no captcha; a block is a hard 403 "Access Denied".
+
+What the scraper does about it:
+
+a. Chrome TLS impersonation. Plain requests gets a 403 on every ticket endpoint; curl_cffi impersonating Chrome gets through.
+# config
+CURL_IMPERSONATE = "chrome124"
+HEADERS = {
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+# __init__
+self._http = curl_requests.Session(impersonate=CURL_IMPERSONATE)
+self._http.headers.update(HEADERS)
+
+b. Proxy fallback, only on 401/403. It retries once through proxy slot 2, which is set up on Cloud Run via the PROXY2_* secrets. 
+Locally there's no proxy, so it's skipped.
+b. Proxy fallback, only on 401/403. It retries once through proxy slot 2, which is set up on Cloud Run via the PROXY2_* secrets. Locally there's no proxy, so it's skipped.
+
+def _http_get(self, url):
+    resp = self._http.get(url, timeout=REQUEST_TIMEOUT)
+    if resp.status_code in (401, 403):
+        proxied = self._get_proxied_session()   # None if PROXY2_* unset
+        if proxied is not None:
+            resp = proxied.get(url, timeout=REQUEST_TIMEOUT)
+    return resp
+
+def _get_proxied_session(self):
+    if self._proxy_http is None:
+        proxies = self.get_proxies_dict_2()
+        if not proxies:
+            return None
+        session = curl_requests.Session(impersonate=CURL_IMPERSONATE)
+        session.headers.update(HEADERS)
+        session.proxies.update(proxies)
+        self._proxy_http = session
+    return self._proxy_http
+
+c. Block diagnostics. Every non-200 response is logged with its Akamai reference, so a block can be diagnosed from the Cloud Run log alone.
+akamai_ref = resp.headers.get("Akamai-GRN") or resp.headers.get("X-Akamai-Session-Info")
+self.custom_logger.error("Non-200 response: %s -> HTTP %s | Akamai-GRN=%s | body: %s", ...)
+
+d. Pacing and retries.
+DELAY_BETWEEN_SHOWS = (2.0, 4.0)
+DELAY_BETWEEN_PERFORMANCES = (1.0, 2.5)
+DELAY_BETWEEN_API_CALLS = (0.5, 1.5)      # human_delay() before each section call
+DELAY_BETWEEN_PASSES = (30.0, 60.0)
+LISTING_MAX_ATTEMPTS = SHOW_FETCH_MAX_ATTEMPTS = SEATMAP_MAX_ATTEMPTS = SHOW_PASS_MAX_ATTEMPTS = 3
+AVAILABILITY_MAX_ATTEMPTS = 3
+
+e. Real browser, only when needed. _verify_sold_out_via_browser opens a SeleniumBase browser via self.get_sb_kwargs() only when every section looks sold out but the availability check says tickets remain.
+
+The gap: our Akamai cookie stays unvalidated (~-1~), so Akamai can still block the scraper after enough requests. 
+That's what hit your full run. Scraping 2 shows instead of 38 cuts the request count by about 80%, and the three full runs since had no 403s. 
+It isn't proof it can't happen again. The two fixes I suggested would close it: a cooldown with fresh cookies after a 403, and a validated cookie from one browser visit per run. 
+Want me to go ahead with those?
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
