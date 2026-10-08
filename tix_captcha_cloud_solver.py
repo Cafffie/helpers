@@ -90,7 +90,23 @@ A capped live run (1 show, direct route since the local .env has no proxy creden
 Lint passes with black, isort --profile black, and flake8.
 
 
+Needs confirming on Cloud Run:
 
+- The proxy credentials must be set there (PROXY2_ENABLED, PROXY2_HOST, PROXY2_USER, PROXY2_PASS, and the slot 1 equivalents). If a slot is unset, the log says so and skips it.
+- If the university site blocks the proxy's IP too, the run will fail on purpose. I removed the tix-only fallback so a blocked season page never writes a wrong open_date.
+- The first Cloud Run log shows which route worked and why any route failed.
+I also saved offline_proxy_ladder_check.py in the pending folder; it is the 15-check script.
+
+
+
+src/scrapers/biletyna_w/run_extractor.py isn't mine, and I didn't touch it this session. It is uncommitted work you did on a different branch, so there is nothing for me to record for it.
+
+My own work this session is the UNO scraper, saved in C:\Users\Awarri User\Documents\ovation_pending\unomaha_theatre\. The lessons from it that are worth recording:
+
+- Tix Cloudflare captcha: it is already in prod-scraper-fixer.md on the UNO branch.
+-403 on unomaha.edu from Cloud Run: it is recorded there too, marked as not yet verified on Cloud Run.
+-Proxy-ladder change: I haven't added a new entry for it. It is the same pattern forgetheatre, novabillings and olathetheatre already use, and I haven't confirmed it works with the real credentials. 
+ When you switch back to the UNO branch and the Cloud Run run confirms which route works, I'll update the existing 403 entry then.
 
 
 
